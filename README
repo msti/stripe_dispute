@@ -1,1 +1,10 @@
-@todo
+This module allows website that have integrated with the stripe payment gateway
+to dispute chargebacks from the site UI.
+
+- Shows all the open chargebacks with their status
+- Allows you to manually submit a chargeback dispute
+- If a chargeback dispute is not submitted manually, it will be submitted via 
+cron before the expiry date
+- Use hook_stripe_dispute_evidence_alter() to add evidence to the chargeback 
+dispute report.
+
