@@ -1,0 +1,59 @@
+<?php
+
+/**
+ * @file
+ * Install the module
+ */
+
+/**
+ * Implements hook_install().
+ */
+function stripe_dispute_install() {
+
+  // Create an ECK entity.
+  $entity_type = new EntityType();
+
+  $entity_type->name = "eck_stripe_dispute";
+  $entity_type->label = "Stripe Dispute";
+
+  $entity_type->addProperty('charge_id', 'Charge ID', 'text');
+  $entity_type->addProperty('amount', 'Amount', 'integer');
+  $entity_type->addProperty('chargeback_creation', 'Chargeback Creation', 'integer', 'date');
+  $entity_type->addProperty('status', 'Status', 'text');
+  $entity_type->addProperty('currency', 'Currency', 'text');
+  $entity_type->addProperty('reason', 'Reason', 'text');
+  $entity_type->addProperty('balance_transaction', 'Balance Transactions', 'text');
+  $entity_type->addProperty('due_by', 'Evidence Due By', 'integer', 'date');
+  $entity_type->addProperty('evidence', 'Evidence', 'text');
+  $entity_type->addProperty('order_id', 'Commerce Order', 'integer', 'commerce_order');
+  $entity_type->addProperty('created', 'Created', 'integer', 'created');
+  $entity_type->addProperty('changed', 'Updated', 'integer', 'changed');
+  $entity_type->addProperty('log', 'Log', 'text');
+
+  $entity_type->save();
+
+  // Create a Bundle.
+  $entity_type_bundle = new Bundle();
+  $entity_type_bundle->name = 'stripe_dispute';
+  $entity_type_bundle->entity_type = 'eck_stripe_dispute';
+  $entity_type_bundle->save();
+}
+
+/**
+ * Implements hook_uninstall().
+ *
+ * Delete the bundle and the entity
+ */
+function stripe_dispute_uninstall() {
+  $entity_type = EntityType::loadByName('eck_stripe_dispute');
+
+  $entity_type_bundle = Bundle::loadByEntityType('eck_stripe_dispute');
+  if ($entity_type_bundle) {
+    $entity_type_bundle->delete();
+  }
+
+  if ($entity_type) {
+    $entity_type->delete();
+  }
+}
+

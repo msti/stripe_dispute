@@ -1,0 +1,9 @@
+name = Stripe Dispute
+description = Utilizes stripe webhooks to learn about incoming chargeback requests and allows to submit chargeback disputes.
+core = 7.x
+files[] = views/views_action_views_handler_dispute_link.inc
+dependencies[] = commerce_stripe
+dependencies[] = commerce_payment
+dependencies[] = eck
+
+

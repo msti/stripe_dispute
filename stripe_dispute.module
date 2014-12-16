@@ -1,0 +1,242 @@
+<?php
+
+/**
+ * @file
+ * This module provides a method for disputing chargebacks straight
+ * from the Commerce shop.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function stripe_dispute_menu() {
+  $items = array();
+
+  $items['admin/stripe/dispute/%'] = array(
+    'title' => 'Chargeback Dispute',
+    'description' => 'Use this form to dispute a chargeback',
+    'access callback' => 'user_access',
+    'access arguments' => array('stripe_dispute_manage_dispute'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('stripe_dispute_manage_dispute', 3),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'stripe_dispute.menu.inc',
+  );
+
+  $items['stripe/webhook'] = array(
+    'page callback' => 'stripe_webhook_page_callback',
+    'access arguments' => array('access content'),
+    'file' => 'stripe_dispute.menu.inc',
+  );
+
+  return $items;
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function stripe_dispute_views_api() {
+  return array(
+    'api' => 3,
+    'path' => drupal_get_path('module', 'stripe_dispute') . '/views',
+  );
+}
+
+/**
+ * Implements hook_ctools_plugin_directory().
+ */
+function stripe_dispute_ctools_plugin_directory($owner, $plugin_type) {
+  if ($owner == 'eck' && $plugin_type == 'property_behavior') {
+    return 'plugins/' . $plugin_type;
+  }
+}
+
+/**
+ * Implements hook_permission().
+ */
+function stripe_dispute_permission() {
+  $return = array();
+
+  $return['stripe_dispute_manage_dispute'] = array(
+    'title' => t('Manage stripe disputes'),
+    'description' => t('Manage stripe disputes'),
+  );
+
+  return $return;
+}
+
+/**
+ * Form validate callback.
+ */
+function stripe_dispute_manage_dispute_validate($form, &$form_state) {
+
+  // @todo Skip validation for now
+  if (isset($form_state['storage']['confirm'])) {
+    return;
+  }
+}
+
+/**
+ * Form submit callback.
+ */
+function stripe_dispute_manage_dispute_submit($form, &$form_state) {
+
+  if (!isset($form_state['storage']['confirm'])) {
+    // This will cause the form to be rebuilt, entering the confirm
+    // part of the form.
+    $form_state['storage']['confirm'] = TRUE;
+    $form_state['storage']['original_form'] = $form_state['values'];
+    $form_state['rebuild'] = TRUE;
+  }
+  else {
+    // Do real form submit using
+    // saved off $form_state['storage']['original_form'].
+    $form_state['values'] = $form_state['storage']['original_form'];
+    stripe_dispute_dispute($form_state['values']['stripe_id'], $form_state['values']['dispute_evidence']);
+  }
+}
+
+/**
+ * Dispute a stripe chargeback (API).
+ */
+function stripe_dispute_dispute($stripe_id, $evidence) {
+  $stripe_settings = _commerce_stripe_load_settings();
+  $key = $stripe_settings['secret_key'];
+  commerce_stripe_load_library();
+
+  try {
+    Stripe::setApiKey($key);
+    $ch = Stripe_Charge::retrieve($stripe_id);
+    $ch->updateDispute(array("evidence" => "Here is the evidence that this charge is legit: /n-------------------------/n" . $evidence));
+  }
+  catch (Exception$e) {
+    drupal_set_message(t('We received the following error from Stripe: %error.', array('%error' => $e->getMessage())), 'error');
+    drupal_set_message(t('The chargeback was not disputed!'), 'error');
+    watchdog('stripe_dispute', 'The following error was received from Stripe: @stripe_error.', array('@stripe_error' => $e->getMessage()), WATCHDOG_NOTICE);
+  }
+}
+
+/**
+ * Implements hook_stripe_dispute().
+ *
+ * Incoming hooks intercepted here! - Create, update or close the dispute entity
+ */
+function stripe_dispute_stripe_dispute($webhook, $type) {
+
+  // Create a dispute entity.
+  if ($type == 'charge.dispute.created') {
+
+    $values = $webhook->data->object;
+
+    $stripe_values = array(
+      'charge_id' => $values->charge,
+      'amount' => $values->amount,
+      'chargeback_creation' => $values->created,
+      'status' => $values->status,
+      'currency' => $values->currency,
+      'reason' => $values->reason,
+      'balance_transaction' => $values->balance_transaction,
+      'due_by' => $values->evidence_due_by,
+    );
+    stripe_dispute_dispute_new($stripe_values);
+  }
+  // Update the dispute entity.
+  elseif ($type == 'charge.dispute.updated') {
+    $values = $webhook->data->object;
+    $dispute = current(stripe_dispute_dispute_load(FALSE, array('charge_id' => $values->charge)));
+    $dispute->status = $values->status;
+    $dispute->evidence = $values->evidence;
+    stripe_dispute_dispute_update($dispute);
+  }
+  // Close the dispute.
+  elseif ($type == 'charge.dispute.closed') {
+    $values = $webhook->data->object;
+    $dispute = current(stripe_dispute_dispute_load(FALSE, array('charge_id' => $values->charge)));
+    $dispute->status = $values->status;
+    stripe_dispute_dispute_update($dispute);
+  }
+}
+
+/**
+ * Delete a Stripe Dispute entity.
+ *
+ * @param $dispute
+ *   The dispute entity
+ */
+function stripe_dispute_dispute_delete($dispute) {
+  eck_entity_delete($dispute, 'stripe_dispute');
+}
+
+/**
+ * Create a Stripe Dispute entity.
+ *
+ * @param $values
+ *   Array that contains the value of the new entity
+ */
+function stripe_dispute_dispute_new($values) {
+  // Bundle type.
+  $values['type'] = 'stripe_dispute';
+  $values['order_id'] = stripe_dispute_get_chargeback_order($values['charge_id']);
+  entity_create('eck_stripe_dispute', $values)->save();
+}
+
+/**
+ * Get the order id from a stripe transaction.
+ */
+function stripe_dispute_get_chargeback_order($charge_id) {
+  $transactions = commerce_payment_transaction_load_multiple(array(), array('remote_id' => $charge_id));
+  if (count($transactions) > 0) {
+    return current($transactions)->order_id;
+  }
+  else {
+    return;
+  }
+}
+
+/**
+ * Update a Stripe Dispute entity.
+ *
+ * @param $dispute
+ *   The dispute entity
+ */
+function stripe_dispute_dispute_update($dispute) {
+  $dispute->save();
+}
+
+/**
+ * Load a stripe dispute.
+ */
+function stripe_dispute_dispute_load($ids = FALSE, $conditions = array()) {
+  return entity_load('eck_stripe_dispute', $ids, $conditions);
+}
+
+/**
+ * Generate a string of dispute evidence to be sent to Stripe.
+ */
+function stripe_dispute_generate_evidence($dispute) {
+  $evidence = array();
+  drupal_alter('stripe_dispute_evidence', $evidence, $dispute);
+  return implode("\n", $evidence);
+}
+
+/**
+ * Implements hook_cron().
+ *
+ * Automatically submit the dispute if it has not been submitted
+ * and the due date is within the next 24 hours
+ */
+function stripe_dispute_cron() {
+
+  $now = time();
+  // @todo Add a UI for this var
+  $threshold = $now + 60 * 60 * 24;
+  $disputes_data = db_query('SELECT id FROM {eck_eck_stripe_dispute} WHERE due_by < :threshold AND status=:status', array(':threshold' => $threshold, ':status' => 'needs_response'));
+
+  // Gather evidence for the dispute
+  // Stripe_dispute_generate_evidence(stripe_dispute_dispute_load(array()));
+  foreach ($disputes_data as $dispute_data) {
+    $dispute = current(stripe_dispute_dispute_load(array($dispute_data->id)));
+    $evidence = stripe_dispute_generate_evidence($dispute);
+    stripe_dispute_dispute($dispute->charge_id, $evidence);
+  }
+}
